@@ -1,22 +1,20 @@
 # 🚀 Steam Signal Telegram Bot
 
-Автоматизований Telegram-канал, який аналізує ринок ігор у Steam, відбирає найкращі пропозиції за алгоритмом скорингу та публікує смарт-пости з ШІ-генерованими описами.
+An automated Telegram bot that monitors and analyzes the Steam game market, selects the best deals using a custom scoring algorithm, and publishes smart posts with AI-generated descriptions.
 
-## 🛠 Технологічний стек
-* **Мова розробки:** Python
-* **База даних:** SQLite (архітектура з урахуванням жанрових лімітів та історії парсингу)
-* **Інтеграції:** Steam API, Google Gemini API (модель `gemini-2.5-flash`)
-* **Бібліотеки:** `requests`, `python-dotenv`, `google-genai`
+## 🛠 Tech Stack
+* **Programming Language:** Python
+* **Database:** SQLite (efficient architecture optimized for tracking genre limits and scan history)
+* **Integrations:** Steam API, Google Gemini API (`gemini-2.5-flash` model)
+* **Libraries & Packages:** `requests`, `python-dotenv`, `google-genai`
 
-## 📊 Ключові аналітичні та технічні фічі
-1. **Алгоритм динамічного скорингу:** Впроваджено систему вагових коефіцієнтів для оцінки вигідності знижок. Для оптимізації різноманітності контенту налаштовано мультиплікатори тегів (наприклад, зниження пріоритету для надлишку симуляторів/стратегій), що дозволяє утримувати баланс цікавості для підписників.
-2. **Валідація та очищення даних:** Автоматичний парсинг ігор з фільтрацією дублікатів через базу даних, перевірка "історичного мінімуму" ціни та обробка виключень API.
-3. **Розумний менеджмент публікацій:** Гнучкий алгоритм таймерів із вбудованою рандомізацією часу постів (захист від поведінки "бота") та обробка лімітів Telegram API при надсиланні медіаконтенту.
+## 📊 Key Analytical & Technical Features
+1. **Dynamic Scoring Algorithm:** Implemented a custom weight-based scoring system to evaluate the overall value of game discounts. To enhance content diversity and prevent channel fatigue, smart multipliers are applied to specific tags (e.g., automatically lowering the priority of strategy or simulation games if they flood the queue), maintaining an optimal content mix for subscribers.
+2. **Data Validation & Cleaning:** Automated pipeline to fetch data from Steam, filtering out duplicates via the SQLite backend, tracking historical low prices, and safely handling API exceptions.
+3. **Smart Posting Schedule:** A flexible timer logic featuring built-in post time randomization to mimic organic human behavior (anti-bot protection) alongside reliable handling of Telegram API limits when deploying media heavy content.
 
-## 🚀 Як запустити локально
+## 🚀 How to Run Locally
 
-1. Склонуйте репозиторій.
-2. Створіть файл `.env` на основі `.env.example` та вкажіть свої ключі доступу.
-3. Встановіть залежності:
+1. Clone the repository:
    ```bash
-   pip install -r requirements.txt
+   git clone [https://github.com/Vlad34745/steam-signal-bot.git](https://github.com/Vlad34745/steam-signal-bot.git)
