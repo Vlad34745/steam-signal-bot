@@ -6,9 +6,11 @@ import logging
 import re
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 from google import genai
+
+import config
 
 # ================= CONFIGURATION =================
 load_dotenv()
@@ -25,26 +27,17 @@ logging.basicConfig(
 
 if GEMINI_KEY:
     client = genai.Client(api_key=GEMINI_KEY)
-    logging.info("✅ Gemini API підключено")
+    logging.info("Gemini API connected")
 else:
-    logging.error("❌ GEMINI_API_KEY не знайдено!")
+    client = None
+    logging.error("GEMINI_API_KEY not found!")
 
-MODEL_NAME = "gemini-2.5-flash" 
-
-AI_STYLES = [
-    {"role": "геймер-аналітик", "mood": "чітко, з акцентом на жанр та механіки"},
-    {"role": "ігровий гід", "mood": "дружньо, дає конкретну пораду, кому гра сподобається"},
-    {"role": "твій бро-геймер", "mood": "простою мовою пояснює суть гри та її фішки"}
-]
-
-BLOCK_LIST = ["hentai", "nudity", "sexual", "puzzle for adults", "artbook", "soundtrack"]
 
 # ================= DATABASE =================
 def init_db():
     conn = sqlite3.connect("steam.db")
     c = conn.cursor()
 
-    # Повністю оновлена таблиця з колонкою genres
     c.execute("""
     CREATE TABLE IF NOT EXISTS games (
         game_id TEXT PRIMARY KEY,
@@ -68,74 +61,56 @@ def init_db():
     conn.commit()
     conn.close()
 
-# ================= SCORING (З МНОЖНИКАМИ ЖАНРІВ) =================
+
+# ================= SCORING =================
 def calc_score(discount, name, price, rating, genres_str):
+    """
+    Scores a deal based on brand recognition, Steam rating, price sanity,
+    and genre preference. Higher score = higher priority to post.
+    """
     boost = 0
     name_lower = name.lower()
     genres_lower = genres_str.lower() if genres_str else ""
-    
-    hot_brands = {
-        "witcher", "cyberpunk", "stalker", "metro", "gta", "red dead", "baldurs gate", 
-        "elden ring", "dark souls", "sekiro", "bloodborne", "lies of p", "god of war", 
-        "nier:automata", "horizon", "ghost of tsushima", "days gone", "death stranding", 
-        "spider-man", "star wars", "final fantasy", "hogwarts", "fallout", "skyrim", 
-        "elder scrolls", "starfield", "mass effect", "dragon age", "battlefield", 
-        "call of duty", "far cry", "resident evil", "devil may cry", "doom", 
-        "halflife", "bioshock", "dying light", "borderlands", "hitman", "mafia", 
-        "payday", "helldivers", "rainbow six", "siege", "ready or not", "total war", 
-        "civilization", "hearts of iron", "crusader kings", "stellaris", "manor lords", 
-        "frostpunk", "bannerlord", "forza", "need for speed", "euro truck", "sims", 
-        "hades", "vampire survivors", "hollow knight", "dead cells", "terraria", 
-        "stardew valley", "balatro", "slay the spire", "outer wilds", "inscryption", 
-        "cult of the lamb", "dave the diver", "project zomboid", "valheim", "rust", 
-        "no mans sky", "subnautica", "the forest", "rimworld", "detroit become human", 
-        "persona 5", "yakuza", "like a dragon", "it takes two", "cuphead", "nba"
-    }
-    
-    is_hot = any(brand in name_lower for brand in hot_brands)
-    if is_hot:
-        boost += 150 
 
-    # 2. Обробка рейтингу Steam (КРИТИЧНО: тепер він має величезну вагу)
-    # Якщо рейтинг прийшов як рядок "91%", очищуємо його до числа 91
+    # 1. Brand recognition boost
+    is_hot = any(brand in name_lower for brand in config.HOT_BRANDS)
+    if is_hot:
+        boost += config.BRAND_BOOST
+
+    # 2. Steam rating weight (dominant factor for perceived quality)
     try:
         clean_rating = int(str(rating).replace('%', '').strip())
     except Exception:
-        clean_rating = 75  # Дефолтне значення, якщо сталася помилка
-        
-    # Додаємо бали за якість гри (від 0 до 120 балів)
-    boost += (clean_rating * 1.2)
+        clean_rating = config.DEFAULT_RATING_IF_UNKNOWN
+    boost += clean_rating * config.RATING_WEIGHT
 
-    # 3. Розумні бонуси за ціну та знижку
-    if discount >= 85 and price > 80: 
-        boost += 40  # Бонус за супер-знижку даємо тільки якщо це не копійчаний смітник
-        
-    if 80 <= price < 250: 
-        boost += 30  # Бонус за хорошу "адекватну" ціну для нормальних ігор
+    # 3. Smart price/discount bonuses
+    if discount >= config.HIGH_DISCOUNT_THRESHOLD and price > config.HIGH_DISCOUNT_MIN_PRICE:
+        boost += config.HIGH_DISCOUNT_BOOST  # only reward huge discounts on non-junk games
 
-    # 4. ШТРАФ ЗА ДЕШЕВИЙ ТРЕШ
-    # Якщо гра коштує менше 45 грн і це НЕ відомий бренд із hot_brands — жорстко ріжемо її рейтинг
-    if price < 45 and not is_hot:
-        boost -= 120 
+    fair_min, fair_max = config.FAIR_PRICE_RANGE
+    if fair_min <= price < fair_max:
+        boost += config.FAIR_PRICE_BOOST  # reasonable price range for a full game
 
-    # Базовий розрахунок балів (знижка дає плавний приріст, а не вирішальний)
-    score = (discount * 1.0) + boost + random.randint(0, 15)
-    
-    # --- 5. КОЕФІЦІЄНТИ ЖАНРІВ (Твоє жорстке гальмування) ---
-    slow_genres = ["strategy", "simulation", "management", "city builder", "casual", "стратегия", "симулятор"]
-    fast_genres = ["action", "horror", "shooter", "rpg", "adventure", "екшн", "рольова"]
+    # 4. Penalty for cheap junk (unless it's a known brand)
+    if price < config.LOW_PRICE_JUNK_THRESHOLD and not is_hot:
+        boost += config.LOW_PRICE_JUNK_PENALTY
 
+    # Base score: discount contributes gradually rather than dominating
+    score = (discount * config.BASE_DISCOUNT_WEIGHT) + boost + random.randint(0, config.RANDOM_JITTER_MAX)
+
+    # 5. Genre multipliers
     check_area = f"{name_lower} {genres_lower}"
 
-    if any(m in check_area for m in slow_genres):
-        score = score * 0.4  # Стратегії та симулятори летять на дно
-        
-    if any(m in check_area for m in fast_genres):
-        score = score * 1.2  # Екшни та РПГ отримують легкий приємний буст
+    if any(m in check_area for m in config.SLOW_GENRES):
+        score = score * config.SLOW_GENRE_MULTIPLIER  # strategy/sim genres sink to the bottom
+    if any(m in check_area for m in config.FAST_GENRES):
+        score = score * config.FAST_GENRE_MULTIPLIER  # action/RPG genres get a light boost
 
     return score
 
-# ================= STEAM RATING =================
+
+# ================= STEAM API =================
 def get_steam_rating(appid):
     try:
         url = f"https://store.steampowered.com/appreviews/{appid}?json=1&language=all&purchase_type=all"
@@ -151,43 +126,53 @@ def get_steam_rating(appid):
         logging.warning(f"Rating error {appid}: {e}")
     return None
 
-# ================= STEAM LOGIC =================
+
 def fetch_steam():
     all_ids = []
-    logging.info("🌍 Збір ID...")
+    logging.info("Collecting discounted game IDs from Steam...")
     for page in range(1, 21):
         try:
             url = f"https://store.steampowered.com/search/results/?query&start={(page-1)*50}&count=50&specials=1&cc=UA&infinite=1"
             r = requests.get(url, timeout=15).json()
             found_ids = re.findall(r'data-ds-appid="(\d+)"', r.get('results_html', ''))
-            if not found_ids: break
+            if not found_ids:
+                break
             all_ids.extend(found_ids)
             time.sleep(0.5)
-        except: break
+        except Exception as e:
+            logging.warning(f"Failed to collect IDs on page {page}: {e}")
+            break
 
     final_data = []
     process_limit = min(len(all_ids), 500)
     for i, gid in enumerate(all_ids[:process_limit]):
         try:
-            res = requests.get(f"https://store.steampowered.com/api/appdetails?appids={gid}&cc=UA&l=ukrainian", timeout=10).json()
+            res = requests.get(
+                f"https://store.steampowered.com/api/appdetails?appids={gid}&cc=UA&l=ukrainian",
+                timeout=10,
+            ).json()
             if res and res.get(gid, {}).get('success'):
                 data = res[gid]['data']
-                
+
                 check_str = (data.get('name', '') + data.get('short_description', '')).lower()
-                if any(word in check_str for word in BLOCK_LIST):
+                if any(word in check_str for word in config.BLOCK_LIST):
                     continue
 
                 if data.get('type') == 'game' and data.get('header_image'):
                     final_data.append(data)
             time.sleep(0.7)
-            if (i + 1) % 50 == 0: time.sleep(15)
-        except: continue
+            if (i + 1) % 50 == 0:
+                time.sleep(15)
+        except Exception:
+            continue
     return final_data
 
+
 def norm(g):
+    """Normalizes a raw Steam appdetails payload into the app's internal game format."""
     try:
         price_data = g.get("price_overview", {})
-        if not price_data or price_data.get("discount_percent", 0) < 35:
+        if not price_data or price_data.get("discount_percent", 0) < config.MIN_DISCOUNT_PERCENT:
             return None
 
         gid = str(g.get("steam_appid"))
@@ -198,7 +183,6 @@ def norm(g):
         if movies:
             video_url = movies[0].get("mp4", {}).get("max")
 
-        # [НОВЕ] Витягуємо текстові назви жанрів
         genres_list = g.get("genres", [])
         genres_str = ", ".join([genre.get("description", "") for genre in genres_list])
 
@@ -210,11 +194,12 @@ def norm(g):
             "image": g.get("header_image"),
             "video": video_url,
             "rating": rating,
-            "genres": genres_str, # Зберігаємо рядок жанрів (напр. "Action, RPG")
-            "link": f"https://store.steampowered.com/app/{gid}"
+            "genres": genres_str,
+            "link": f"https://store.steampowered.com/app/{gid}",
         }
-    except:
+    except Exception:
         return None
+
 
 def save_games(games):
     conn = sqlite3.connect("steam.db")
@@ -224,9 +209,9 @@ def save_games(games):
     now = datetime.now().isoformat()
 
     for g in games:
-        if not g: continue
+        if not g:
+            continue
 
-        # Вираховуємо score на льоту за новою логікою
         score = calc_score(g["discount"], g["name"], g["price"], g["rating"], g["genres"])
 
         c.execute("SELECT price FROM games WHERE game_id=?", (g["id"],))
@@ -234,7 +219,7 @@ def save_games(games):
 
         if row:
             c.execute("""
-                UPDATE games 
+                UPDATE games
                 SET discount=?, price=?, last_seen=?, rating_percent=?, genres=?, score=?
                 WHERE game_id=?
             """, (
@@ -242,7 +227,7 @@ def save_games(games):
             ))
         else:
             c.execute("""
-                INSERT INTO games 
+                INSERT INTO games
                 (game_id, name, discount, price, image, video, link, rating_percent, genres, score, last_seen)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """, (
@@ -254,16 +239,21 @@ def save_games(games):
     conn.commit()
     conn.close()
     return added
-    
+
+
 # ================= AI GENERATION =================
 def get_ai_content(name, discount, rating=None, retry=0):
-    if not GEMINI_KEY: 
+    """
+    Generates a short Ukrainian-language promo post via Gemini.
+    Falls back to a static template if the API key is missing or the call fails.
+    """
+    if not GEMINI_KEY:
         return "Гарна пропозиція", f"🔥 {name} за супер ціною!"
     try:
-        time.sleep(2) 
-        style = random.choice(AI_STYLES)
+        time.sleep(2)
+        style = random.choice(config.AI_STYLES)
         rating_info = f"Рейтинг Steam: {rating}%." if rating else "Рейтинг поки невідомий."
-        
+
         prompt = (f"Гра: '{name}' (-{discount}%). {rating_info} "
                   f"Твоя роль: {style['role']}. {style['mood']}. "
                   f"Напиши пост за таким планом: "
@@ -273,12 +263,12 @@ def get_ai_content(name, discount, rating=None, retry=0):
                   f"ВАЖЛИВО: Не пиши слова 'Текст:', 'Жанр:', 'Порада:'. "
                   f"Пиши звичайними літерами (без CAPS LOCK). "
                   f"Розділяй заголовок та основний текст знаком |")
-        
-        response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
-        
+
+        response = client.models.generate_content(model=config.MODEL_NAME, contents=prompt)
+
         if response and hasattr(response, 'text') and response.text:
             text = response.text.replace("*", "").replace("`", "").strip()
-            
+
             if "|" in text:
                 h, b = text.split("|", 1)
             else:
@@ -288,15 +278,23 @@ def get_ai_content(name, discount, rating=None, retry=0):
             h = h.strip().capitalize()
             if b:
                 b = b[0].upper() + b[1:]
-                
+
             return h, b
     except Exception as e:
-        logging.warning(f"⚠️ Gemini error: {e}")
+        logging.warning(f"Gemini error: {e}")
         if retry < 2:
             time.sleep(5)
             return get_ai_content(name, discount, rating, retry + 1)
-    
+
     return "Цікава пропозиція", f"🎮 {name} вже чекає на тебе у Steam!"
+
+
+def _stars_for_rating(rating_percent: int) -> str:
+    for threshold, stars in config.STAR_RATING_TIERS:
+        if rating_percent >= threshold:
+            return stars
+    return config.STAR_RATING_TIERS[-1][1]
+
 
 # ================= POSTING =================
 def post_game():
@@ -304,17 +302,17 @@ def post_game():
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
 
-    # Беремо топ-50 кандидатів, щоб було з чого вибирати в разі застарілих знижок
+    # Pull a larger candidate pool so there's something left if some discounts expired
     c.execute("""
-        SELECT * FROM games 
-        WHERE status='new' 
-        ORDER BY score DESC 
-        LIMIT 50
-    """)
+        SELECT * FROM games
+        WHERE status='new'
+        ORDER BY score DESC
+        LIMIT ?
+    """, (config.POST_CANDIDATE_POOL_SIZE,))
     candidates = list(c.fetchall())
 
     if not candidates:
-        logging.info("Нічого нового для публікації.")
+        logging.info("Nothing new to post.")
         conn.close()
         return False
 
@@ -324,34 +322,34 @@ def post_game():
     for g in candidates:
         try:
             game_id = g['game_id']
-            
-            # --- 1. ПЕРЕВІРКА АКТУАЛЬНОСТІ ЦІНИ (Обов'язково з регіоном та мовою) ---
+
+            # 1. Verify the discount is still active before posting (region + language matter here)
             check_url = f"https://store.steampowered.com/api/appdetails?appids={game_id}&cc=UA&l=ukrainian"
             try:
                 res_steam = requests.get(check_url, timeout=10).json()
             except Exception as e:
-                logging.warning(f"⚠️ Помилка мережі при перевірці Steam для {g['name']}: {e}")
+                logging.warning(f"Network error checking Steam for {g['name']}: {e}")
                 continue
 
             if res_steam and res_steam.get(game_id, {}).get('success'):
                 current_data = res_steam[game_id]['data']
                 price_info = current_data.get("price_overview", {})
-                
-                # КРИТИЧНО: Якщо блоку цін немає або знижка впала нижче 35% — гра застаріла!
-                if not price_info or price_info.get("discount_percent", 0) < 35:
-                    logging.info(f"⏭️ Знижка на {g['name']} закінчилася (або відсутня). Маркуємо як expired.")
+
+                # If there's no price block or the discount dropped below the threshold, it's stale
+                if not price_info or price_info.get("discount_percent", 0) < config.MIN_DISCOUNT_PERCENT:
+                    logging.info(f"Discount for {g['name']} has expired or is missing, marking as expired.")
                     c.execute("UPDATE games SET status='expired' WHERE game_id=?", (game_id,))
                     conn.commit()
-                    continue 
-                
-                # БЕРЕМО ДАНІ ТІЛЬКИ З ЖИВОГО API, А НЕ З БАЗИ!
+                    continue
+
+                # Always use live API data for the actual post, never stale DB values
                 live_discount = int(price_info.get("discount_percent", 0))
                 live_price = price_info.get("final", 0) / 100
             else:
-                logging.warning(f"⚠️ Не вдалося отримати свіжі дані з Steam API для {g['name']}, пропускаємо.")
+                logging.warning(f"Could not fetch fresh Steam data for {g['name']}, skipping.")
                 continue
 
-            # --- 2. ПІДГОТОВКА РЕЙТИНГУ ТА СУВЕНІРНИХ ЗІРОЧОК ---
+            # 2. Prepare the rating block and star tier
             game_rating = g['rating_percent']
             if game_rating is None or game_rating == 0:
                 game_rating = get_steam_rating(game_id)
@@ -361,22 +359,12 @@ def post_game():
 
             rating_block = ""
             if game_rating:
-                # Справедливе округлення зірочок (90%+ — це 5 зірок)
-                if game_rating >= 88:
-                    stars = "⭐⭐⭐⭐⭐"
-                elif game_rating >= 70:
-                    stars = "⭐⭐⭐⭐"
-                elif game_rating >= 50:
-                    stars = "⭐⭐⭐"
-                elif game_rating >= 30:
-                    stars = "⭐⭐"
-                else:
-                    stars = "⭐"
+                stars = _stars_for_rating(game_rating)
                 rating_block = f"⭐ Рейтинг Steam: {stars} ({game_rating}%)\n"
 
-            # --- 3. ГЕНЕРАЦІЯ ШІ-ТЕКСТУ ---
+            # 3. Generate the AI post text
             header, ai_text = get_ai_content(g['name'], live_discount, game_rating)
-            
+
             caption = (
                 f"✨ <b>{header}</b>\n\n"
                 f"🎮 <b>{g['name']}</b>\n"
@@ -386,7 +374,7 @@ def post_game():
                 f"📉 <i>Це історичний мінімум вартості</i>"
             )
 
-            # --- 4. ВІДПРАВКА В TELEGRAM ---
+            # 4. Send to Telegram
             reply_markup = {"inline_keyboard": [[{"text": "🚀 Відкрити в Steam", "url": g['link']}]]}
             method = "sendVideo" if g['video'] else "sendPhoto"
             file_key = "video" if g['video'] else "photo"
@@ -399,45 +387,48 @@ def post_game():
                     file_key: media_url,
                     "caption": caption[:1024],
                     "parse_mode": "HTML",
-                    "reply_markup": json.dumps(reply_markup)
+                    "reply_markup": json.dumps(reply_markup),
                 },
-                timeout=60
+                timeout=60,
             )
 
             if res_tg.status_code == 200:
-                c.execute("UPDATE games SET status='posted', last_posted=?, discount=?, price=? WHERE game_id=?", 
-                          (datetime.now().isoformat(), live_discount, live_price, game_id))
+                c.execute(
+                    "UPDATE games SET status='posted', last_posted=?, discount=?, price=? WHERE game_id=?",
+                    (datetime.now().isoformat(), live_discount, live_price, game_id),
+                )
                 conn.commit()
-                logging.info(f"✅ Опубліковано з актуальною ціною: {g['name']} (-{live_discount}%)")
+                logging.info(f"Posted with live price: {g['name']} (-{live_discount}%)")
                 success = True
-                break 
+                break
             else:
-                logging.error(f"❌ Telegram error ({res_tg.status_code}): {res_tg.text}")
+                logging.error(f"Telegram error ({res_tg.status_code}): {res_tg.text}")
                 c.execute("UPDATE games SET status='failed' WHERE game_id=?", (game_id,))
                 conn.commit()
                 time.sleep(5)
 
         except Exception as e:
-            logging.error(f"⚠️ Критична помилка при обробці {g['name']}: {e}")
+            logging.error(f"Critical error processing {g['name']}: {e}")
             time.sleep(2)
             continue
 
     conn.close()
     return success
 
+
 # ================= MAIN LOOP =================
 def main():
     init_db()
-    logging.info("🚀 Бот запущений з чистою структурою жанрів")
+    logging.info("Bot started")
 
-    today_start_hour = 9
+    today_start_hour = config.DAILY_POST_WINDOW_START_HOUR
     today_start_minute = random.randint(0, 30)
-    logging.info(f"📅 Сьогодні публікації почнуться після {today_start_hour:02d}:{today_start_minute:02d}")
+    logging.info(f"Today's posting window opens after {today_start_hour:02d}:{today_start_minute:02d}")
 
     while True:
         now = datetime.now()
         cur_time = now.strftime("%H:%M")
-        
+
         conn = sqlite3.connect("steam.db")
         try:
             last_scan_row = conn.execute("SELECT value FROM stats WHERE key='last_full_scan'").fetchone()
@@ -450,8 +441,9 @@ def main():
             do_scan = True
         else:
             last_scan_dt = datetime.fromisoformat(last_scan_row[0])
-            if cur_time >= "20:05":
-                today_limit = now.replace(hour=20, minute=0, second=0)
+            reset_time_str = f"{config.FULL_SCAN_DAILY_RESET_HOUR:02d}:05"
+            if cur_time >= reset_time_str:
+                today_limit = now.replace(hour=config.FULL_SCAN_DAILY_RESET_HOUR, minute=0, second=0)
                 if last_scan_dt < today_limit:
                     do_scan = True
             elif (now - last_scan_dt).total_seconds() > 24 * 3600:
@@ -462,36 +454,42 @@ def main():
                 raw_games = fetch_steam()
                 processed_games = [norm(g) for g in raw_games if norm(g)]
                 added = save_games(processed_games)
-                logging.info(f"📥 База оновлена (Додано: {added})")
-                
+                logging.info(f"Database updated (added: {added})")
+
                 conn = sqlite3.connect("steam.db")
                 conn.execute("INSERT OR REPLACE INTO stats (key, value) VALUES ('last_full_scan', ?)", (now.isoformat(),))
                 conn.commit()
                 conn.close()
             except Exception as e:
-                logging.error(f"❌ Помилка при скануванні: {e}")
+                logging.error(f"Scan failed: {e}")
 
-        # --- ЛОГІКА ПОСТУ ---
+        # --- POSTING LOGIC ---
         conn = sqlite3.connect("steam.db")
         try:
             last_post_row = conn.execute("SELECT value FROM stats WHERE key='last'").fetchone()
-        except:
+        except Exception:
             last_post_row = None
         conn.close()
-        
-        if not last_post_row or (now - datetime.fromisoformat(last_post_row[0])).total_seconds() > (random.randint(180, 240) * 60):
+
+        interval_seconds = random.randint(
+            config.POST_INTERVAL_MIN_MINUTES, config.POST_INTERVAL_MAX_MINUTES
+        ) * 60
+
+        if not last_post_row or (now - datetime.fromisoformat(last_post_row[0])).total_seconds() > interval_seconds:
             start_time = now.replace(hour=today_start_hour, minute=today_start_minute, second=0)
-            if start_time <= now < now.replace(hour=23, minute=0, second=0):
+            end_time = now.replace(hour=config.DAILY_POST_WINDOW_END_HOUR, minute=0, second=0)
+            if start_time <= now < end_time:
                 if post_game():
                     conn = sqlite3.connect("steam.db")
                     conn.execute("INSERT OR REPLACE INTO stats (key, value) VALUES ('last', ?)", (datetime.now().isoformat(),))
                     conn.commit()
                     conn.close()
-                    
+
                     today_start_minute = random.randint(0, 30)
-                    logging.info(f"✅ Пост зроблено. Наступного ранку почнемо о 09:{today_start_minute:02d}")
+                    logging.info(f"Post published. Next window opens tomorrow at 09:{today_start_minute:02d}")
 
         time.sleep(60)
+
 
 if __name__ == "__main__":
     main()
