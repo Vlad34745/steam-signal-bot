@@ -70,14 +70,10 @@ def init_db():
 
 # ================= SCORING (З МНОЖНИКАМИ ЖАНРІВ) =================
 def calc_score(discount, name, price, rating, genres_str):
-    """
-    Розрахунок рейтингу з жорстким відсіканням стратегій через коефіцієнти.
-    """
     boost = 0
     name_lower = name.lower()
     genres_lower = genres_str.lower() if genres_str else ""
     
-    # 1. Список топових брендів
     hot_brands = {
         "witcher", "cyberpunk", "stalker", "metro", "gta", "red dead", "baldurs gate", 
         "elden ring", "dark souls", "sekiro", "bloodborne", "lies of p", "god of war", 
@@ -93,33 +89,49 @@ def calc_score(discount, name, price, rating, genres_str):
         "stardew valley", "balatro", "slay the spire", "outer wilds", "inscryption", 
         "cult of the lamb", "dave the diver", "project zomboid", "valheim", "rust", 
         "no mans sky", "subnautica", "the forest", "rimworld", "detroit become human", 
-        "persona 5", "yakuza", "like a dragon", "it takes two", "cuphead"
+        "persona 5", "yakuza", "like a dragon", "it takes two", "cuphead", "nba"
     }
     
-    if any(brand in name_lower for brand in hot_brands):
-        boost += 80 
+    is_hot = any(brand in name_lower for brand in hot_brands)
+    if is_hot:
+        boost += 150 
 
-    # 2. Бонуси за знижку та ціну
-    if discount >= 85: 
-        boost += 60
-    if price < 150: 
-        boost += 40 
+    # 2. Обробка рейтингу Steam (КРИТИЧНО: тепер він має величезну вагу)
+    # Якщо рейтинг прийшов як рядок "91%", очищуємо його до числа 91
+    try:
+        clean_rating = int(str(rating).replace('%', '').strip())
+    except Exception:
+        clean_rating = 75  # Дефолтне значення, якщо сталася помилка
         
-    # Базовий розрахунок балів
-    score = (discount * 1.5) + boost + random.randint(0, 40)
+    # Додаємо бали за якість гри (від 0 до 120 балів)
+    boost += (clean_rating * 1.2)
+
+    # 3. Розумні бонуси за ціну та знижку
+    if discount >= 85 and price > 80: 
+        boost += 40  # Бонус за супер-знижку даємо тільки якщо це не копійчаний смітник
+        
+    if 80 <= price < 250: 
+        boost += 30  # Бонус за хорошу "адекватну" ціну для нормальних ігор
+
+    # 4. ШТРАФ ЗА ДЕШЕВИЙ ТРЕШ
+    # Якщо гра коштує менше 45 грн і це НЕ відомий бренд із hot_brands — жорстко ріжемо її рейтинг
+    if price < 45 and not is_hot:
+        boost -= 120 
+
+    # Базовий розрахунок балів (знижка дає плавний приріст, а не вирішальний)
+    score = (discount * 1.0) + boost + random.randint(0, 15)
     
-    # --- 3. КОЕФІЦІЄНТИ ЖАНРІВ (Жорстке гальмування) ---
+    # --- 5. КОЕФІЦІЄНТИ ЖАНРІВ (Твоє жорстке гальмування) ---
     slow_genres = ["strategy", "simulation", "management", "city builder", "casual", "стратегия", "симулятор"]
     fast_genres = ["action", "horror", "shooter", "rpg", "adventure", "екшн", "рольова"]
 
-    # Перевіряємо назву + офіційні жанри від Steam
     check_area = f"{name_lower} {genres_lower}"
 
     if any(m in check_area for m in slow_genres):
-        score = score * 0.4  # Зрізаємо бал більше ніж удвічі (стратегії йдуть в кінець)
+        score = score * 0.4  # Стратегії та симулятори летять на дно
         
     if any(m in check_area for m in fast_genres):
-        score = score * 1.3  # Просуваємо динамічні жанри вгору
+        score = score * 1.2  # Екшни та РПГ отримують легкий приємний буст
 
     return score
 
@@ -292,11 +304,12 @@ def post_game():
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
 
+    # Беремо топ-50 кандидатів, щоб було з чого вибирати в разі застарілих знижок
     c.execute("""
         SELECT * FROM games 
         WHERE status='new' 
         ORDER BY score DESC 
-        LIMIT 20
+        LIMIT 50
     """)
     candidates = list(c.fetchall())
 
@@ -312,8 +325,8 @@ def post_game():
         try:
             game_id = g['game_id']
             
-            # --- 1. ПЕРЕВІРКА АКТУАЛЬНОСТІ ЦІНИ ---
-            check_url = f"https://store.steampowered.com/api/appdetails?appids={game_id}&cc=UA"
+            # --- 1. ПЕРЕВІРКА АКТУАЛЬНОСТІ ЦІНИ (Обов'язково з регіоном та мовою) ---
+            check_url = f"https://store.steampowered.com/api/appdetails?appids={game_id}&cc=UA&l=ukrainian"
             try:
                 res_steam = requests.get(check_url, timeout=10).json()
             except Exception as e:
@@ -324,16 +337,21 @@ def post_game():
                 current_data = res_steam[game_id]['data']
                 price_info = current_data.get("price_overview", {})
                 
+                # КРИТИЧНО: Якщо блоку цін немає або знижка впала нижче 35% — гра застаріла!
                 if not price_info or price_info.get("discount_percent", 0) < 35:
-                    logging.info(f"⏭️ Знижка на {g['name']} закінчилася. Пропускаємо.")
+                    logging.info(f"⏭️ Знижка на {g['name']} закінчилася (або відсутня). Маркуємо як expired.")
                     c.execute("UPDATE games SET status='expired' WHERE game_id=?", (game_id,))
                     conn.commit()
                     continue 
+                
+                # БЕРЕМО ДАНІ ТІЛЬКИ З ЖИВОГО API, А НЕ З БАЗИ!
+                live_discount = int(price_info.get("discount_percent", 0))
+                live_price = price_info.get("final", 0) / 100
             else:
-                logging.warning(f"⚠️ Не вдалося отримати дані з Steam API для {g['name']}, пропускаємо.")
+                logging.warning(f"⚠️ Не вдалося отримати свіжі дані з Steam API для {g['name']}, пропускаємо.")
                 continue
 
-            # --- 2. ПІДГОТОВКА РЕЙТИНГУ ---
+            # --- 2. ПІДГОТОВКА РЕЙТИНГУ ТА СУВЕНІРНИХ ЗІРОЧОК ---
             game_rating = g['rating_percent']
             if game_rating is None or game_rating == 0:
                 game_rating = get_steam_rating(game_id)
@@ -343,16 +361,26 @@ def post_game():
 
             rating_block = ""
             if game_rating:
-                stars = "⭐" * max(1, min(5, int(game_rating / 20)))
+                # Справедливе округлення зірочок (90%+ — це 5 зірок)
+                if game_rating >= 88:
+                    stars = "⭐⭐⭐⭐⭐"
+                elif game_rating >= 70:
+                    stars = "⭐⭐⭐⭐"
+                elif game_rating >= 50:
+                    stars = "⭐⭐⭐"
+                elif game_rating >= 30:
+                    stars = "⭐⭐"
+                else:
+                    stars = "⭐"
                 rating_block = f"⭐ Рейтинг Steam: {stars} ({game_rating}%)\n"
 
             # --- 3. ГЕНЕРАЦІЯ ШІ-ТЕКСТУ ---
-            header, ai_text = get_ai_content(g['name'], g['discount'], game_rating)
+            header, ai_text = get_ai_content(g['name'], live_discount, game_rating)
             
             caption = (
                 f"✨ <b>{header}</b>\n\n"
                 f"🎮 <b>{g['name']}</b>\n"
-                f"💸 -{g['discount']}% | <b>{g['price']:.0f} грн</b>\n"
+                f"💸 -{live_discount}% | <b>{live_price:.0f} грн</b>\n"
                 f"{rating_block}\n"
                 f"📝 {ai_text}\n\n"
                 f"📉 <i>Це історичний мінімум вартості</i>"
@@ -377,10 +405,10 @@ def post_game():
             )
 
             if res_tg.status_code == 200:
-                c.execute("UPDATE games SET status='posted', last_posted=? WHERE game_id=?", 
-                          (datetime.now().isoformat(), game_id))
+                c.execute("UPDATE games SET status='posted', last_posted=?, discount=?, price=? WHERE game_id=?", 
+                          (datetime.now().isoformat(), live_discount, live_price, game_id))
                 conn.commit()
-                logging.info(f"✅ Опубліковано: {g['name']}")
+                logging.info(f"✅ Опубліковано з актуальною ціною: {g['name']} (-{live_discount}%)")
                 success = True
                 break 
             else:
