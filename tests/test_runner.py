@@ -259,3 +259,51 @@ def test_main_handles_scan_exception(db_path, monkeypatch):
 
     with pytest.raises(StopLoop):
         main("tok", "chat", db_path=db_path, sleep_fn=fake_sleep)
+
+
+# ---------- post_game: historic-low claim ----------
+
+def test_post_game_flags_historic_low_when_live_price_at_or_below_min(db_path, monkeypatch):
+    db.save_games([{
+        "id": "1", "name": "Test Game", "discount": 50, "price": 100.0,
+        "image": "img", "video": None, "link": "http://link",
+        "rating": 80, "genres": "RPG",
+    }], db_path=db_path)  # min_price becomes 100.0
+    monkeypatch.setattr("bot.runner.check_live_price", lambda gid, **kw: (60, 90.0))  # new low
+    monkeypatch.setattr("bot.runner.get_ai_content", lambda *a, **kw: ("Header", "Body"))
+
+    captured = {}
+
+    class OkResp:
+        status_code = 200
+
+    def fake_send_post(token, chat_id, caption, image, video, link, **kw):
+        captured["caption"] = caption
+        return OkResp()
+
+    monkeypatch.setattr("bot.runner.send_post", fake_send_post)
+    assert post_game("tok", "chat", db_path=db_path) is True
+    assert "найнижча ціна" in captured["caption"]
+
+
+def test_post_game_does_not_flag_historic_low_when_price_above_min(db_path, monkeypatch):
+    db.save_games([{
+        "id": "1", "name": "Test Game", "discount": 50, "price": 50.0,
+        "image": "img", "video": None, "link": "http://link",
+        "rating": 80, "genres": "RPG",
+    }], db_path=db_path)  # min_price becomes 50.0
+    monkeypatch.setattr("bot.runner.check_live_price", lambda gid, **kw: (30, 80.0))  # higher than min
+    monkeypatch.setattr("bot.runner.get_ai_content", lambda *a, **kw: ("Header", "Body"))
+
+    captured = {}
+
+    class OkResp:
+        status_code = 200
+
+    def fake_send_post(token, chat_id, caption, image, video, link, **kw):
+        captured["caption"] = caption
+        return OkResp()
+
+    monkeypatch.setattr("bot.runner.send_post", fake_send_post)
+    assert post_game("tok", "chat", db_path=db_path) is True
+    assert "найнижча ціна" not in captured["caption"]

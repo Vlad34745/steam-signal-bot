@@ -32,6 +32,29 @@ def test_save_games_inserts_new_and_counts_added(db_path):
     assert {c["game_id"] for c in candidates} == {"1", "2"}
 
 
+def test_save_games_sets_min_price_to_price_on_insert(db_path):
+    db.init_db(db_path)
+    db.save_games([make_game(gid="1", price=99.0)], db_path=db_path)
+    candidates = db.get_post_candidates(10, db_path=db_path)
+    assert candidates[0]["min_price"] == 99.0
+
+
+def test_save_games_lowers_min_price_when_new_price_is_lower(db_path):
+    db.init_db(db_path)
+    db.save_games([make_game(gid="1", price=100.0)], db_path=db_path)
+    db.save_games([make_game(gid="1", price=70.0)], db_path=db_path)
+    candidates = db.get_post_candidates(10, db_path=db_path)
+    assert candidates[0]["min_price"] == 70.0
+
+
+def test_save_games_keeps_min_price_when_new_price_is_higher(db_path):
+    db.init_db(db_path)
+    db.save_games([make_game(gid="1", price=70.0)], db_path=db_path)
+    db.save_games([make_game(gid="1", price=100.0)], db_path=db_path)
+    candidates = db.get_post_candidates(10, db_path=db_path)
+    assert candidates[0]["min_price"] == 70.0
+
+
 def test_save_games_updates_existing_without_counting_as_added(db_path):
     db.init_db(db_path)
     db.save_games([make_game(gid="1", discount=30)], db_path=db_path)
@@ -90,3 +113,21 @@ def test_mark_posted_sets_status_and_live_values(db_path):
     assert row["discount"] == 60
     assert row["price"] == 40.0
     assert row["last_posted"] is not None
+
+
+def test_mark_posted_lowers_min_price_when_live_price_is_new_low(db_path):
+    db.init_db(db_path)
+    db.save_games([make_game(gid="1", price=100.0)], db_path=db_path)  # min_price=100
+    db.mark_posted("1", discount=70, price=60.0, db_path=db_path)
+    with db.get_connection(db_path) as conn:
+        row = conn.execute("SELECT min_price FROM games WHERE game_id='1'").fetchone()
+    assert row["min_price"] == 60.0
+
+
+def test_mark_posted_keeps_min_price_when_live_price_is_higher(db_path):
+    db.init_db(db_path)
+    db.save_games([make_game(gid="1", price=50.0)], db_path=db_path)  # min_price=50
+    db.mark_posted("1", discount=30, price=80.0, db_path=db_path)
+    with db.get_connection(db_path) as conn:
+        row = conn.execute("SELECT min_price FROM games WHERE game_id='1'").fetchone()
+    assert row["min_price"] == 50.0

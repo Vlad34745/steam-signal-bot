@@ -29,6 +29,16 @@ def test_build_caption_contains_key_fields():
     assert "199 грн" in caption
 
 
+def test_build_caption_omits_historic_low_line_by_default():
+    caption = build_caption("Header", "Game", 60, 199.0, "rating\n", "AI text")
+    assert "найнижча ціна" not in caption
+
+
+def test_build_caption_includes_historic_low_line_when_flagged():
+    caption = build_caption("Header", "Game", 60, 199.0, "rating\n", "AI text", is_historic_low=True)
+    assert "найнижча ціна" in caption
+
+
 def test_send_post_uses_photo_when_no_video():
     session = FakeSession([FakeResponse(200)])
     send_post("tok", "chat", "caption", image="img.png", video=None, link="http://x", session=session)

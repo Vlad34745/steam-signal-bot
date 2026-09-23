@@ -63,15 +63,17 @@ def save_games(games, db_path: str = DB_PATH) -> int:
             if row:
                 c.execute("""
                     UPDATE games
-                    SET discount=?, price=?, last_seen=?, rating_percent=?, genres=?, score=?
+                    SET discount=?, price=?, last_seen=?, rating_percent=?, genres=?, score=?,
+                        min_price = CASE WHEN min_price IS NULL OR ? < min_price THEN ? ELSE min_price END
                     WHERE game_id=?
-                """, (g["discount"], g["price"], now, g["rating"], g["genres"], score, g["id"]))
+                """, (g["discount"], g["price"], now, g["rating"], g["genres"], score,
+                      g["price"], g["price"], g["id"]))
             else:
                 c.execute("""
                     INSERT INTO games
-                    (game_id, name, discount, price, image, video, link, rating_percent, genres, score, last_seen)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                """, (g["id"], g["name"], g["discount"], g["price"], g["image"], g["video"],
+                    (game_id, name, discount, price, min_price, image, video, link, rating_percent, genres, score, last_seen)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (g["id"], g["name"], g["discount"], g["price"], g["price"], g["image"], g["video"],
                       g["link"], g["rating"], g["genres"], score, now))
                 added += 1
         conn.commit()
@@ -96,11 +98,17 @@ def mark_status(game_id: str, status: str, db_path: str = DB_PATH) -> None:
 
 
 def mark_posted(game_id: str, discount: int, price: float, db_path: str = DB_PATH) -> None:
+    """Marks a game as posted with its live discount/price, and folds that
+    live price into min_price if it's the lowest we've ever observed
+    (min_price only reflects prices this bot has actually seen, not Steam's
+    full price history, which Steam does not expose publicly)."""
     with closing(get_connection(db_path)) as conn:
-        conn.execute(
-            "UPDATE games SET status='posted', last_posted=?, discount=?, price=? WHERE game_id=?",
-            (datetime.now().isoformat(), discount, price, game_id),
-        )
+        conn.execute("""
+            UPDATE games
+            SET status='posted', last_posted=?, discount=?, price=?,
+                min_price = CASE WHEN min_price IS NULL OR ? < min_price THEN ? ELSE min_price END
+            WHERE game_id=?
+        """, (datetime.now().isoformat(), discount, price, price, price, game_id))
         conn.commit()
 
 

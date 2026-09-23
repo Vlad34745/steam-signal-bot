@@ -94,7 +94,13 @@ def post_game(token: str, chat_id: str, ai_client=None, db_path: str = db.DB_PAT
                 rating_block = f"⭐ Рейтинг Steam: {stars} ({game_rating}%)\n"
 
             header, ai_text = get_ai_content(g["name"], live_discount, game_rating, client=ai_client)
-            caption = build_caption(header, g["name"], live_discount, live_price, rating_block, ai_text)
+            # min_price reflects the lowest price this bot has observed for this game so far
+            # (via scans + past live-price checks) - it's only ever set from data we fetched
+            # ourselves, since Steam doesn't expose a public full price-history API.
+            stored_min = g.get("min_price")
+            is_historic_low = stored_min is None or live_price <= stored_min
+            caption = build_caption(header, g["name"], live_discount, live_price, rating_block, ai_text,
+                                     is_historic_low=is_historic_low)
 
             res_tg = send_post(token, chat_id, caption, g["image"], g["video"], g["link"])
 

@@ -15,14 +15,18 @@ import requests
 TELEGRAM_API_BASE = "https://api.telegram.org"
 
 
-def build_caption(header: str, name: str, live_discount: int, live_price: float, rating_block: str, ai_text: str) -> str:
+def build_caption(header: str, name: str, live_discount: int, live_price: float, rating_block: str,
+                   ai_text: str, is_historic_low: bool = False) -> str:
+    # Only claim a historic low when it's actually true for prices this bot has observed -
+    # previously this line was shown unconditionally on every post, which was misleading.
+    footer = "\n\n📉 <i>Це найнижча ціна, яку бот бачив на цю гру</i>" if is_historic_low else ""
     return (
         f"✨ <b>{header}</b>\n\n"
         f"🎮 <b>{name}</b>\n"
         f"💸 -{live_discount}% | <b>{live_price:.0f} грн</b>\n"
         f"{rating_block}\n"
-        f"📝 {ai_text}\n\n"
-        f"📉 <i>Це історичний мінімум вартості</i>"
+        f"📝 {ai_text}"
+        f"{footer}"
     )
 
 
