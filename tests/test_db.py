@@ -1,5 +1,7 @@
 import pytest
 
+from datetime import datetime, timedelta
+
 from bot import db
 
 
@@ -131,3 +133,49 @@ def test_mark_posted_keeps_min_price_when_live_price_is_higher(db_path):
     with db.get_connection(db_path) as conn:
         row = conn.execute("SELECT min_price FROM games WHERE game_id='1'").fetchone()
     assert row["min_price"] == 50.0
+
+
+# ---------- cleanup_old_entries ----------
+
+def _set_last_seen(db_path, game_id, iso_ts):
+    with db.get_connection(db_path) as conn:
+        conn.execute("UPDATE games SET last_seen=? WHERE game_id=?", (iso_ts, game_id))
+        conn.commit()
+
+
+def test_cleanup_removes_old_terminal_status_entries(db_path):
+    db.init_db(db_path)
+    db.save_games([make_game(gid="1")], db_path=db_path)
+    db.mark_status("1", "expired", db_path=db_path)
+    old_ts = (datetime.now() - timedelta(days=40)).isoformat()
+    _set_last_seen(db_path, "1", old_ts)
+
+    removed = db.cleanup_old_entries(retention_days=30, db_path=db_path)
+    assert removed == 1
+    with db.get_connection(db_path) as conn:
+        row = conn.execute("SELECT * FROM games WHERE game_id='1'").fetchone()
+    assert row is None
+
+
+def test_cleanup_keeps_recent_terminal_status_entries(db_path):
+    db.init_db(db_path)
+    db.save_games([make_game(gid="1")], db_path=db_path)
+    db.mark_status("1", "expired", db_path=db_path)
+    recent_ts = (datetime.now() - timedelta(days=5)).isoformat()
+    _set_last_seen(db_path, "1", recent_ts)
+
+    removed = db.cleanup_old_entries(retention_days=30, db_path=db_path)
+    assert removed == 0
+    with db.get_connection(db_path) as conn:
+        row = conn.execute("SELECT * FROM games WHERE game_id='1'").fetchone()
+    assert row is not None
+
+
+def test_cleanup_keeps_new_status_entries_regardless_of_age(db_path):
+    db.init_db(db_path)
+    db.save_games([make_game(gid="1")], db_path=db_path)  # status stays 'new'
+    old_ts = (datetime.now() - timedelta(days=100)).isoformat()
+    _set_last_seen(db_path, "1", old_ts)
+
+    removed = db.cleanup_old_entries(retention_days=30, db_path=db_path)
+    assert removed == 0

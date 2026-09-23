@@ -11,7 +11,7 @@ a connection on exceptions.
 """
 import sqlite3
 from contextlib import closing
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from bot.scoring import calc_score
 
@@ -116,6 +116,21 @@ def update_rating(game_id: str, rating: int, db_path: str = DB_PATH) -> None:
     with closing(get_connection(db_path)) as conn:
         conn.execute("UPDATE games SET rating_percent=? WHERE game_id=?", (rating, game_id))
         conn.commit()
+
+
+def cleanup_old_entries(retention_days: int, db_path: str = DB_PATH) -> int:
+    """Deletes games stuck in a terminal status (posted/expired/failed) that
+    haven't been touched by a scan in over ``retention_days`` days. Keeps the
+    ``games`` table from growing forever. Returns the number of rows removed."""
+    cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+    with closing(get_connection(db_path)) as conn:
+        cur = conn.execute("""
+            DELETE FROM games
+            WHERE status IN ('posted', 'expired', 'failed')
+              AND last_seen IS NOT NULL AND last_seen < ?
+        """, (cutoff,))
+        conn.commit()
+        return cur.rowcount
 
 
 def get_stat(key: str, db_path: str = DB_PATH):

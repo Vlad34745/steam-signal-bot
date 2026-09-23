@@ -59,6 +59,11 @@ def run_scan(db_path: str = db.DB_PATH) -> int:
     processed_games = normalize_all(raw_games)
     added = db.save_games(processed_games, db_path=db_path)
     logging.info(f"Database updated (added: {added})")
+
+    removed = db.cleanup_old_entries(config.DB_RETENTION_DAYS, db_path=db_path)
+    if removed:
+        logging.info(f"Cleaned up {removed} old entries (older than {config.DB_RETENTION_DAYS} days).")
+
     db.set_stat("last_full_scan", datetime.now().isoformat(), db_path=db_path)
     return added
 
@@ -154,3 +159,33 @@ def main(token: str, chat_id: str, ai_client=None, db_path: str = db.DB_PATH, sl
                 logging.info(f"Post published. Next window opens tomorrow at 09:{today_start_minute:02d}")
 
         sleep_fn(60)
+
+
+# ================= CRASH-RESISTANT WRAPPER =================
+def run_forever(token: str, chat_id: str, ai_client=None, db_path: str = db.DB_PATH,
+                 sleep_fn=time.sleep, restart_delay_seconds: int = config.CRASH_RESTART_DELAY_SECONDS,
+                 max_restarts: Optional[int] = None):
+    """
+    Runs main() and automatically restarts it if it crashes with an
+    unhandled exception (main()'s own loop body already catches scan and
+    per-candidate posting errors - this is a last-resort safety net for
+    anything that slips past those, e.g. a corrupted DB file).
+
+    KeyboardInterrupt (Ctrl+C) is never treated as a crash - it always
+    propagates so the process actually stops when asked to.
+    """
+    restarts = 0
+    while True:
+        try:
+            main(token, chat_id, ai_client=ai_client, db_path=db_path, sleep_fn=sleep_fn)
+        except KeyboardInterrupt:
+            logging.info("Stopped by user (KeyboardInterrupt).")
+            raise
+        except Exception as e:
+            restarts += 1
+            logging.error(f"Bot crashed unexpectedly: {e}. Restarting in {restart_delay_seconds}s "
+                           f"(restart #{restarts}).")
+            if max_restarts is not None and restarts >= max_restarts:
+                logging.error(f"Reached max_restarts={max_restarts}, giving up.")
+                raise
+            sleep_fn(restart_delay_seconds)

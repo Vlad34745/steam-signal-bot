@@ -71,6 +71,13 @@ POST_INTERVAL_MIN_MINUTES = 180
 POST_INTERVAL_MAX_MINUTES = 240
 FULL_SCAN_DAILY_RESET_HOUR = 20
 
+# How long a game stays in the DB after reaching a terminal status
+# (posted / expired / failed) before cleanup_old_entries() removes it
+DB_RETENTION_DAYS = 30
+
+# How long to wait before restarting the main loop after an unhandled crash
+CRASH_RESTART_DELAY_SECONDS = 30
+
 # Star rating tiers: (minimum_rating_percent, stars)
 STAR_RATING_TIERS = [
     (88, "⭐⭐⭐⭐⭐"),

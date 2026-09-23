@@ -3,7 +3,7 @@ from datetime import datetime
 import pytest
 
 from bot import config, db
-from bot.runner import should_do_full_scan, should_attempt_post, post_game, run_scan, main
+from bot.runner import should_do_full_scan, should_attempt_post, post_game, run_scan, main, run_forever
 
 
 # ---------- should_do_full_scan ----------
@@ -307,3 +307,36 @@ def test_post_game_does_not_flag_historic_low_when_price_above_min(db_path, monk
     monkeypatch.setattr("bot.runner.send_post", fake_send_post)
     assert post_game("tok", "chat", db_path=db_path) is True
     assert "найнижча ціна" not in captured["caption"]
+
+
+# ---------- run_forever ----------
+
+def test_run_forever_restarts_after_crash_then_gives_up(db_path, monkeypatch):
+    calls = {"n": 0}
+
+    def flaky_main(token, chat_id, ai_client=None, db_path=None, sleep_fn=None):
+        calls["n"] += 1
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("bot.runner.main", flaky_main)
+    sleeps = []
+
+    with pytest.raises(RuntimeError):
+        run_forever("tok", "chat", db_path=db_path, sleep_fn=sleeps.append,
+                     restart_delay_seconds=7, max_restarts=2)
+
+    assert calls["n"] == 2
+    assert sleeps == [7]  # slept once between attempt 1 and attempt 2, then gave up
+
+
+def test_run_forever_propagates_keyboard_interrupt_without_restarting(db_path, monkeypatch):
+    def interrupted_main(*a, **kw):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr("bot.runner.main", interrupted_main)
+    sleeps = []
+
+    with pytest.raises(KeyboardInterrupt):
+        run_forever("tok", "chat", db_path=db_path, sleep_fn=sleeps.append)
+
+    assert sleeps == []  # no restart attempted
