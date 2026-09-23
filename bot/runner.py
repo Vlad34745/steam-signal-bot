@@ -14,7 +14,7 @@ from typing import Optional
 from bot import config, db
 from bot.scoring import stars_for_rating
 from bot.steam_api import fetch_steam, get_steam_rating, normalize_all, check_live_price
-from bot.telegram_client import build_caption, send_post
+from bot.telegram_client import build_caption, send_post, send_text
 from bot.ai_content import get_ai_content
 
 
@@ -127,10 +127,47 @@ def post_game(token: str, chat_id: str, ai_client=None, db_path: str = db.DB_PAT
     return False
 
 
+# ================= SILENCE ALERT =================
+def check_and_alert_if_silent(token: str, chat_id: str, now: datetime, db_path: str = db.DB_PATH,
+                               silence_alert_days: int = config.SILENCE_ALERT_DAYS,
+                               recheck_hours: int = config.SILENCE_ALERT_RECHECK_HOURS) -> bool:
+    """
+    Sends a Telegram alert to the channel/chat if the bot hasn't successfully
+    posted anything in ``silence_alert_days`` days - e.g. because Steam
+    started silently blocking requests, or every candidate keeps failing.
+    Won't re-alert more often than ``recheck_hours``. Returns True if an
+    alert was actually sent.
+    """
+    reference_iso = db.get_stat("last", db_path=db_path) or db.get_stat("bot_started_at", db_path=db_path)
+    if not reference_iso:
+        return False
+
+    silent_seconds = (now - datetime.fromisoformat(reference_iso)).total_seconds()
+    if silent_seconds < silence_alert_days * 86400:
+        return False
+
+    last_alert_iso = db.get_stat("last_silence_alert", db_path=db_path)
+    if last_alert_iso:
+        since_last_alert = (now - datetime.fromisoformat(last_alert_iso)).total_seconds()
+        if since_last_alert < recheck_hours * 3600:
+            return False
+
+    days_silent = int(silent_seconds // 86400)
+    text = f"⚠️ Steam Signal бот не публікував пости вже {days_silent}+ дн. Перевір bot.log."
+    res = send_text(token, chat_id, text)
+    if res is not None and res.status_code == 200:
+        db.set_stat("last_silence_alert", now.isoformat(), db_path=db_path)
+        return True
+    return False
+
+
 # ================= MAIN LOOP =================
 def main(token: str, chat_id: str, ai_client=None, db_path: str = db.DB_PATH, sleep_fn=time.sleep):
     db.init_db(db_path=db_path)
     logging.info("Bot started")
+
+    if not db.get_stat("bot_started_at", db_path=db_path):
+        db.set_stat("bot_started_at", datetime.now().isoformat(), db_path=db_path)
 
     today_start_hour = config.DAILY_POST_WINDOW_START_HOUR
     today_start_minute = random.randint(0, 30)
@@ -157,6 +194,8 @@ def main(token: str, chat_id: str, ai_client=None, db_path: str = db.DB_PATH, sl
                 db.set_stat("last", datetime.now().isoformat(), db_path=db_path)
                 today_start_minute = random.randint(0, 30)
                 logging.info(f"Post published. Next window opens tomorrow at 09:{today_start_minute:02d}")
+
+        check_and_alert_if_silent(token, chat_id, now, db_path=db_path)
 
         sleep_fn(60)
 

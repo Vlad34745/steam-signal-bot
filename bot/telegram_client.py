@@ -1,5 +1,6 @@
 """
-Telegram Bot API client for publishing a game post (photo or video + caption).
+Telegram Bot API client: publishing a game post (photo/video + caption) and
+sending plain-text alerts (e.g. the "bot's gone quiet" self-alert).
 
 Handles HTTP 429 ("Too Many Requests") the way the Bot API expects: it
 returns a JSON body with parameters.retry_after (seconds to wait), so we
@@ -30,6 +31,30 @@ def build_caption(header: str, name: str, live_discount: int, live_price: float,
     )
 
 
+def _post_with_429_retry(url: str, payload: dict, session: requests.Session, sleep_fn, max_429_retries: int):
+    """Shared HTTP-post-with-429-backoff logic used by both send_post and send_text."""
+    attempts = 0
+    while True:
+        try:
+            res = session.post(url, data=payload, timeout=60)
+        except Exception as e:
+            logging.warning(f"Telegram network error: {e}")
+            return None
+
+        if res.status_code == 429 and attempts < max_429_retries:
+            retry_after = 5
+            try:
+                retry_after = res.json().get("parameters", {}).get("retry_after", 5)
+            except Exception:
+                pass
+            logging.warning(f"Telegram rate limit hit, waiting {retry_after}s before retry.")
+            sleep_fn(retry_after)
+            attempts += 1
+            continue
+
+        return res
+
+
 def send_post(token: str, chat_id: str, caption: str, image: str, video: str, link: str,
               session: requests.Session = requests, sleep_fn=time.sleep, max_429_retries: int = 3):
     """
@@ -49,24 +74,17 @@ def send_post(token: str, chat_id: str, caption: str, image: str, video: str, li
         "parse_mode": "HTML",
         "reply_markup": json.dumps(reply_markup),
     }
+    return _post_with_429_retry(f"{TELEGRAM_API_BASE}/bot{token}/{method}",
+                                 payload, session, sleep_fn, max_429_retries)
 
-    attempts = 0
-    while True:
-        try:
-            res = session.post(f"{TELEGRAM_API_BASE}/bot{token}/{method}", data=payload, timeout=60)
-        except Exception as e:
-            logging.warning(f"Telegram network error: {e}")
-            return None
 
-        if res.status_code == 429 and attempts < max_429_retries:
-            retry_after = 5
-            try:
-                retry_after = res.json().get("parameters", {}).get("retry_after", 5)
-            except Exception:
-                pass
-            logging.warning(f"Telegram rate limit hit, waiting {retry_after}s before retry.")
-            sleep_fn(retry_after)
-            attempts += 1
-            continue
-
-        return res
+def send_text(token: str, chat_id: str, text: str,
+              session: requests.Session = requests, sleep_fn=time.sleep, max_429_retries: int = 3):
+    """
+    Sends a plain text message (used for the "bot's gone quiet" self-alert,
+    not for game posts). Returns the final requests.Response, or None if the
+    request itself raised.
+    """
+    payload = {"chat_id": str(chat_id).strip(), "text": text[:4096]}
+    return _post_with_429_retry(f"{TELEGRAM_API_BASE}/bot{token}/sendMessage",
+                                 payload, session, sleep_fn, max_429_retries)

@@ -71,13 +71,18 @@ def fetch_steam(session: requests.Session = requests, sleep_fn=time.sleep):
     all_ids = collect_discounted_appids(session=session, sleep_fn=sleep_fn)
     final_data = []
     process_limit = min(len(all_ids), 500)
+    logging.info(f"Found {len(all_ids)} discounted game IDs, checking details for {process_limit} of them...")
     for i, gid in enumerate(all_ids[:process_limit]):
         data = fetch_appdetails(gid, session=session)
         if data and not is_blocked(data) and data.get('type') == 'game' and data.get('header_image'):
             final_data.append(data)
         sleep_fn(0.7)
         if (i + 1) % 50 == 0:
+            # Without this, a scan of 300-500 games prints nothing for several minutes
+            # straight and looks hung even though it's just rate-limiting itself.
+            logging.info(f"Processed {i + 1}/{process_limit} games... ({len(final_data)} qualified so far)")
             sleep_fn(15)
+    logging.info(f"Fetch complete: {len(final_data)} games qualified out of {process_limit} checked.")
     return final_data
 
 

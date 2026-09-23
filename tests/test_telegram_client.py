@@ -86,3 +86,34 @@ def test_send_post_returns_none_on_network_error():
 
     res = send_post("tok", "chat", "cap", "img", None, "link", session=BoomSession())
     assert res is None
+
+
+def test_send_text_uses_sendmessage_endpoint():
+    session = FakeSession([FakeResponse(200)])
+    from bot.telegram_client import send_text
+    send_text("tok", "chat", "Hello there", session=session)
+    url, data = session.calls[0]
+    assert "sendMessage" in url
+    assert data["text"] == "Hello there"
+    assert data["chat_id"] == "chat"
+
+
+def test_send_text_truncates_long_text():
+    session = FakeSession([FakeResponse(200)])
+    from bot.telegram_client import send_text
+    long_text = "x" * 5000
+    send_text("tok", "chat", long_text, session=session)
+    _, data = session.calls[0]
+    assert len(data["text"]) == 4096
+
+
+def test_send_text_retries_on_429():
+    session = FakeSession([
+        FakeResponse(429, json_body={"parameters": {"retry_after": 2}}),
+        FakeResponse(200),
+    ])
+    from bot.telegram_client import send_text
+    sleeps = []
+    res = send_text("tok", "chat", "hi", session=session, sleep_fn=sleeps.append)
+    assert res.status_code == 200
+    assert sleeps == [2]

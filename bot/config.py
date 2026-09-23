@@ -78,6 +78,15 @@ DB_RETENTION_DAYS = 30
 # How long to wait before restarting the main loop after an unhandled crash
 CRASH_RESTART_DELAY_SECONDS = 30
 
+# If the bot hasn't successfully posted anything in this many days, it sends
+# itself a Telegram alert (so silent failures - e.g. Steam quietly blocking
+# requests - don't go unnoticed for weeks)
+SILENCE_ALERT_DAYS = 3
+
+# Minimum time between repeated silence alerts, so it doesn't spam the same
+# warning every minute once the threshold is crossed
+SILENCE_ALERT_RECHECK_HOURS = 24
+
 # Star rating tiers: (minimum_rating_percent, stars)
 STAR_RATING_TIERS = [
     (88, "⭐⭐⭐⭐⭐"),

@@ -3,7 +3,8 @@ from datetime import datetime
 import pytest
 
 from bot import config, db
-from bot.runner import should_do_full_scan, should_attempt_post, post_game, run_scan, main, run_forever
+from bot.runner import (should_do_full_scan, should_attempt_post, post_game, run_scan, main,
+                         run_forever, check_and_alert_if_silent)
 
 
 # ---------- should_do_full_scan ----------
@@ -340,3 +341,82 @@ def test_run_forever_propagates_keyboard_interrupt_without_restarting(db_path, m
         run_forever("tok", "chat", db_path=db_path, sleep_fn=sleeps.append)
 
     assert sleeps == []  # no restart attempted
+
+
+# ---------- check_and_alert_if_silent ----------
+
+def test_no_alert_when_no_reference_timestamp_yet(db_path):
+    db.init_db(db_path)
+    assert check_and_alert_if_silent("tok", "chat", datetime(2026, 1, 1), db_path=db_path) is False
+
+
+def test_no_alert_when_within_threshold(db_path):
+    db.init_db(db_path)
+    db.set_stat("last", datetime(2026, 1, 1).isoformat(), db_path=db_path)
+    now = datetime(2026, 1, 2)  # only 1 day silent, threshold is 3
+    assert check_and_alert_if_silent("tok", "chat", now, db_path=db_path,
+                                      silence_alert_days=3) is False
+
+
+def test_alert_sent_once_threshold_crossed(db_path, monkeypatch):
+    db.init_db(db_path)
+    db.set_stat("last", datetime(2026, 1, 1).isoformat(), db_path=db_path)
+    now = datetime(2026, 1, 5)  # 4 days silent, threshold 3
+
+    sent = {}
+
+    class OkResp:
+        status_code = 200
+
+    def fake_send_text(token, chat_id, text, **kw):
+        sent["text"] = text
+        return OkResp()
+
+    monkeypatch.setattr("bot.runner.send_text", fake_send_text)
+    result = check_and_alert_if_silent("tok", "chat", now, db_path=db_path, silence_alert_days=3)
+    assert result is True
+    assert "4" in sent["text"]
+    assert db.get_stat("last_silence_alert", db_path=db_path) is not None
+
+
+def test_alert_not_repeated_within_recheck_window(db_path, monkeypatch):
+    db.init_db(db_path)
+    db.set_stat("last", datetime(2026, 1, 1).isoformat(), db_path=db_path)
+    db.set_stat("last_silence_alert", datetime(2026, 1, 5).isoformat(), db_path=db_path)
+    now = datetime(2026, 1, 5, 2, 0)  # 2h after last alert, recheck window is 24h
+
+    monkeypatch.setattr("bot.runner.send_text", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not send")))
+    result = check_and_alert_if_silent("tok", "chat", now, db_path=db_path,
+                                        silence_alert_days=3, recheck_hours=24)
+    assert result is False
+
+
+def test_alert_falls_back_to_bot_started_at_when_never_posted(db_path, monkeypatch):
+    db.init_db(db_path)
+    db.set_stat("bot_started_at", datetime(2026, 1, 1).isoformat(), db_path=db_path)
+    now = datetime(2026, 1, 10)
+
+    class OkResp:
+        status_code = 200
+
+    monkeypatch.setattr("bot.runner.send_text", lambda *a, **kw: OkResp())
+    result = check_and_alert_if_silent("tok", "chat", now, db_path=db_path, silence_alert_days=3)
+    assert result is True
+
+
+# ---------- main() sets bot_started_at and checks silence ----------
+
+def test_main_sets_bot_started_at_once(db_path, monkeypatch):
+    monkeypatch.setattr("bot.runner.should_do_full_scan", lambda *a, **kw: False)
+    monkeypatch.setattr("bot.runner.should_attempt_post", lambda *a, **kw: False)
+    monkeypatch.setattr("bot.runner.check_and_alert_if_silent", lambda *a, **kw: False)
+
+    class StopLoop(Exception):
+        pass
+
+    def fake_sleep(_seconds):
+        raise StopLoop()
+
+    with pytest.raises(StopLoop):
+        main("tok", "chat", db_path=db_path, sleep_fn=fake_sleep)
+    assert db.get_stat("bot_started_at", db_path=db_path) is not None
