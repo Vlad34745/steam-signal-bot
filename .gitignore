@@ -3,3 +3,7 @@ steam.db
 bot.log
 bot_errors.log
 __pycache__/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
