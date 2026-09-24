@@ -1,6 +1,12 @@
 from bot.steam_api import (
-    get_steam_rating, collect_discounted_appids, fetch_appdetails,
-    is_blocked, fetch_steam, norm, normalize_all, check_live_price,
+    check_live_price,
+    collect_discounted_appids,
+    fetch_appdetails,
+    fetch_steam,
+    get_steam_rating,
+    is_blocked,
+    norm,
+    normalize_all,
 )
 
 

@@ -1,4 +1,4 @@
-from bot.telegram_client import send_post, build_caption
+from bot.telegram_client import build_caption, send_post
 
 
 class FakeResponse:

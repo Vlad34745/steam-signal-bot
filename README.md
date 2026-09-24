@@ -10,7 +10,7 @@ An automated Telegram bot that monitors and analyzes the Steam game market, sele
 * **Database:** SQLite, used to track scan history, deduplicate games, and store per-game state (new / posted / expired)
 * **Integrations:** Steam API, Google Gemini API (`gemini-2.5-flash` model), Telegram Bot API
 * **Libraries & Packages:** `requests`, `python-dotenv`, `google-genai`
-* **Testing:** `pytest`, `pytest-cov`, GitHub Actions CI, Codecov
+* **Testing & Code Quality:** `pytest`, `pytest-cov`, `ruff`, GitHub Actions CI, Codecov, Dependabot
 
 ## 📊 Key Analytical & Technical Features
 
@@ -69,6 +69,12 @@ Configuration values such as scoring weights, blocked keywords, and posting sche
 ```bash
 pip install -r requirements-dev.txt
 pytest
+```
+
+## 🧹 Linting
+
+```bash
+ruff check .
 ```
 
 This runs the full suite with coverage reporting (configured in `pytest.ini`) and writes `coverage.xml`, which the CI pipeline uploads to Codecov on every push/PR to `main`.

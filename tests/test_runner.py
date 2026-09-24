@@ -3,9 +3,15 @@ from datetime import datetime
 import pytest
 
 from bot import config, db
-from bot.runner import (should_do_full_scan, should_attempt_post, post_game, run_scan, main,
-                         run_forever, check_and_alert_if_silent)
-
+from bot.runner import (
+    check_and_alert_if_silent,
+    main,
+    post_game,
+    run_forever,
+    run_scan,
+    should_attempt_post,
+    should_do_full_scan,
+)
 
 # ---------- should_do_full_scan ----------
 
@@ -172,7 +178,6 @@ def test_post_game_fetches_rating_when_missing(db_path, monkeypatch):
 
     monkeypatch.setattr("bot.runner.send_post", lambda *a, **kw: FakeResp())
     assert post_game("tok", "chat", db_path=db_path) is True
-    candidates_after = db.get_post_candidates(10, db_path=db_path)
     # posted, so no longer a 'new' candidate - check the row directly instead
     with db.get_connection(db_path) as conn:
         row = conn.execute("SELECT rating_percent FROM games WHERE game_id='1'").fetchone()
