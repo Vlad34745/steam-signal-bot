@@ -9,16 +9,15 @@ import logging
 import random
 import time
 from datetime import datetime
-from typing import Optional
 
 from bot import config, db
-from bot.scoring import stars_for_rating
-from bot.steam_api import fetch_steam, get_steam_rating, normalize_all, check_live_price
-from bot.telegram_client import build_caption, send_post, send_text
 from bot.ai_content import get_ai_content
+from bot.scoring import stars_for_rating
+from bot.steam_api import check_live_price, fetch_steam, get_steam_rating, normalize_all
+from bot.telegram_client import build_caption, send_post, send_text
 
 
-def should_do_full_scan(now: datetime, last_scan_iso: Optional[str]) -> bool:
+def should_do_full_scan(now: datetime, last_scan_iso: str | None) -> bool:
     """True if a full Steam catalogue scan is due.
 
     Rule: scan if we've never scanned, or if it's past today's daily reset
@@ -203,7 +202,7 @@ def main(token: str, chat_id: str, ai_client=None, db_path: str = db.DB_PATH, sl
 # ================= CRASH-RESISTANT WRAPPER =================
 def run_forever(token: str, chat_id: str, ai_client=None, db_path: str = db.DB_PATH,
                  sleep_fn=time.sleep, restart_delay_seconds: int = config.CRASH_RESTART_DELAY_SECONDS,
-                 max_restarts: Optional[int] = None):
+                 max_restarts: int | None = None):
     """
     Runs main() and automatically restarts it if it crashes with an
     unhandled exception (main()'s own loop body already catches scan and
