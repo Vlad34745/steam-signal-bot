@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/Vlad34745/steam-signal-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/Vlad34745/steam-signal-bot/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/Vlad34745/steam-signal-bot/branch/main/graph/badge.svg)](https://codecov.io/gh/Vlad34745/steam-signal-bot)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 An automated Telegram bot that monitors and analyzes the Steam game market, selects the best deals using a custom scoring algorithm, and publishes smart posts with AI-generated descriptions.
 
@@ -78,3 +79,7 @@ ruff check .
 ```
 
 This runs the full suite with coverage reporting (configured in `pytest.ini`) and writes `coverage.xml`, which the CI pipeline uploads to Codecov on every push/PR to `main`.
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).
